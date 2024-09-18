@@ -18,6 +18,7 @@ using namespace std;
 
 mutex cout_mutex;
 nlohmann::json json_data;
+bool plot;
 
 struct ThreadArgs {
     size_t client_id;
@@ -67,10 +68,11 @@ void* get_data(void* args){
     }
 
     close(client_fd);
-
-    ofstream output("output/output_"+to_string((int)client_id)+".txt");
-    for(const auto& [word, count]:word_count){
-        output<<word<<' '<<count<<'\n';
+    if(plot){
+        ofstream output("output/output_"+to_string((int)client_id)+".txt");
+        for(const auto& [word, count]:word_count){
+            output<<word<<' '<<count<<'\n';
+        }
     }
     return nullptr;
 }
@@ -98,112 +100,36 @@ int create_server(){
 
 }
 
-// void* client_duty(void* args) {
-//     ThreadArgs* threadArgs = static_cast<ThreadArgs*>(args);
-//     size_t client_id = threadArgs->client_id;
-//     int server_socket = threadArgs->server_socket;
-//     delete threadArgs; // Free the allocated memory
 
-//     {
-//         lock_guard<mutex> lock(cout_mutex);
-//         cout << "Client " << to_string(client_id) << ": Connected to server" << endl;
-//     }
+int main(int argc, char* argv[]) {
 
-//     size_t count = 0;
-//     unordered_map<string, size_t> word_count;
-//     bool end = false;
-//     char buffer[1024] = {0};
-//     int k = json_data["k"];
-//     while (!end) {
-//         string message = to_string(count) + "\n";
-//         {
-//             lock_guard<mutex> lock(cout_mutex);
-//             cout << "Client " << client_id << ": <SENT> " << message << endl;
-//         }
-//         send(server_socket, message.c_str(), message.size(), 0);
-//         int word_remaining = k;
-//         while (word_remaining > 0 && !end) {
-//             int valread = read(server_socket, buffer, 1024);
-//             if (valread == 0) {
-//                 end = true;
-//                 break;
-//             }
-//             message = "";
-//             for (const char& c : buffer) {
-//                 if (c == '\n') break;
-//                 message.push_back(c);
-//             }
-//             {
-//                 lock_guard<mutex> lock(cout_mutex);
-//                 cout << "Client " << client_id << ": <RECEIVED> " << message << endl;
-//             }
-//             string word = "";
-//             for (const char& c : message) {
-//                 if (c == ',') {
-//                     word_count[word]++;
-//                     word.clear();
+    plot = false;
+    if (argc == 2 && std::strcmp(argv[1], "--plot") == 0) {
+        plot = true;
+    }
 
-//                     word_remaining--;
-//                 } else {
-//                     word.push_back(c);
-//                 }
-//             }
-//             word_remaining--;
-//             word_count[word]++;
-//             if(word == "EOF")end =true;
-//         }
-//         count += k;
-//     }
-//     close(server_socket);
-//     {
-//         lock_guard<mutex> lock(cout_mutex);
-//         cout << "Client " << client_id << ": Connection closed" << endl;
-//     }
-//     ofstream out("output/output_" + to_string(client_id) + ".txt");
-//     for (const auto& [word, count] : word_count) {
-//         out << word << "," << count << endl;
-//     }
-//     out.close();
-
-//     return nullptr;
-// }
-
-int main() {
     ifstream jso("config.json");
     jso >> json_data;
 
-    vector<pthread_t> threads;
-    size_t noc = json_data["num_clients"];
-    for (size_t i = 1; i <= noc ; i++) {
-        // int client_fd = socket(AF_INET, SOCK_STREAM, 0);
-        // if (client_fd == -1) {
-        //     std::cerr << "Client " << i << ": Failed to create socket" << std::endl;
-        //     return -1;
-        // }
-        // struct sockaddr_in serv_addr;
-        // serv_addr.sin_family = AF_INET;
-        // uint16_t server_port = json_data["server_port"];
-        // serv_addr.sin_port = htons(server_port); // little endian to big endian
-        // string server_ip = json_data["server_ip"];
-        // serv_addr.sin_addr.s_addr = inet_addr(server_ip.c_str());
+    for(size_t i = 1,l = plot?32:1;i<=l;i++){
+        vector<pthread_t> threads;
+        
+        size_t noc;
+        if(plot) noc = i;
+        else noc = json_data["num_clients"];
 
-        // if (connect(client_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        //     std::cerr << "Client: Connection failed" << std::endl;
-        //     i--;
-        //     i = min(i, (size_t)1);
-        //     continue;
-        // }
-        int client_fd = create_server();
+        for (size_t i = 1; i <= noc ; i++) {
+            int client_fd = create_server();
 
-        ThreadArgs* args = new ThreadArgs{i, client_fd};
-        pthread_t thread;
-        pthread_create(&thread, nullptr, get_data, args);
-        threads.push_back(thread);
+            ThreadArgs* args = new ThreadArgs{i, client_fd};
+            pthread_t thread;
+            pthread_create(&thread, nullptr, get_data, args);
+            threads.push_back(thread);
+        }
+
+        for (auto& thread : threads) {
+            pthread_join(thread, nullptr);
+        }
     }
-
-    for (auto& thread : threads) {
-        pthread_join(thread, nullptr);
-    }
-
     return 0;
 }

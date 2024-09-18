@@ -23,10 +23,29 @@ struct server {
     uint32_t k, p, noc;//noc: number of clients
     vector<string> words;
     bool collision, use;
-    server(string ip, uint16_t port, uint32_t k, uint32_t p, const string& filename, int server_fd, uint32_t noc) : k(k), p(p), server_fd(server_fd), collision(false), use(false), noc(noc) {
+    server(string ip, uint16_t port, uint32_t k, uint32_t p, const string& filename, uint32_t noc) : k(k), p(p), server_fd(server_fd), collision(false), use(false), noc(noc) {
+        //setup server
+        server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (server_fd == -1) {
+            std::cerr << "Server:Failed to create socket" << std::endl;
+            throw runtime_error("Server:Failed to create socket");
+        }
         address.sin_family = AF_INET;
-        address.sin_port = htons(port); // little endian to big endian
+        address.sin_port = htons(port);//little endian to big endian
         address.sin_addr.s_addr = inet_addr(ip.c_str());
+
+        //bind to the port and listen
+        if(bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0){
+            std::cerr << "Server:Failed to bind" << std::endl;
+            close(server_fd);
+            throw runtime_error("Server:Failed to bind");
+        }
+
+        if(listen(server_fd, 1) < 0){
+            std::cerr << "Server:Failed to listen" << std::endl;
+            close(server_fd);
+            throw runtime_error("Server:Failed to listen");
+        }
         string_parsing(filename);
     }
 
@@ -68,11 +87,11 @@ struct server {
     }
 };
 
-server read_parameters(int& server_fd) {
+server read_parameters() {
     ifstream i("config.json");
     nlohmann::json j;
     i >> j;
-    return server(j["server_ip"], static_cast<uint16_t>(j["server_port"]), k, p, j["filename"], server_fd, j["num_clients"]);
+    return server(j["server_ip"], static_cast<uint16_t>(j["server_port"]), k, p, j["filename"], j["num_clients"]);
 }
 
 string read_message(char buffer[1024]){
@@ -90,7 +109,7 @@ struct ThreadArgs {
     int client_id;
 };
 
-void* handle_client_aloha(void* args) {
+void* handle_client(void* args) {
     ThreadArgs* threadArgs = static_cast<ThreadArgs*>(args);
     int client_socket = threadArgs->client_socket;
     server& sv = *(threadArgs->sv);
@@ -153,53 +172,71 @@ int main(int argc, char* argv[]) {;
         return 1;
     }
     string protocol = argv[1];
-    if(protocol != "aloha" && protocol != "beb"&& protocol != "csma"){
-        cout << "Invalid protocol" << endl;
-        return 1;
-    }
 
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd == -1) {
-        std::cerr << "Server: Failed to create socket" << std::endl;
-        return -1;
-    }
-    server sv = read_parameters(server_fd);
+    server sv = read_parameters();
 
-    if (bind(sv.server_fd, (struct sockaddr*)&sv.address, sizeof(sv.address)) < 0) {
-        std::cerr << "Server: Failed to bind" << std::endl;
-        return -1;
-    }
+    bool plot = std::strcmp(argv[1], "--plot") == 0;
+    bool all = plot || std::strcmp(argv[1], "--all") == 0;
+    
+    vector<pair<string,double>> time;
 
-    if (listen(sv.server_fd, sv.noc) < 0) {
-        std::cerr << "Server: Failed to listen" << std::endl;
-        return -1;
-    }
-    cout<<"Server: Listening"<<endl;
-
-    vector<pthread_t> threads;
-    size_t users = sv.noc;
-
-
-    while (users) {
-        int addrlen = sizeof(sv.address);
-        int new_socket = accept(sv.server_fd, (struct sockaddr*)&sv.address, (socklen_t*)&addrlen);
-        if (new_socket < 0) {
-            std::cerr << "Server: Failed to accept" << std::endl;
-            continue;
+    for(size_t i = 1,l = plot?32:1;i<=l;i++){
+        vector<string> protocols;
+        if(all){
+            protocols = {"aloha", "beb", "csma"};
         }
-        // cout<<"Server: Accepted connection with client "<<sv.noc - users + 1<<endl;
-        ThreadArgs* args = new ThreadArgs{new_socket, &sv,(int)sv.noc + 1 - (int)users};
-        pthread_t thread;
-        pthread_create(&thread, nullptr, handle_client_aloha, args);
-        threads.push_back(thread);
-        users--;
+        else{
+            protocols.push_back(argv[1]);
+        }
+        for(string& protocol:protocols){
+            
+            vector<pthread_t> threads;
+            sv.noc = plot?i:sv.noc;
+            size_t users = sv.noc;
+
+            auto start = chrono::high_resolution_clock::now();
+
+            while (users) {
+                int addrlen = sizeof(sv.address);
+                int new_socket = accept(sv.server_fd, NULL, NULL);
+                if (new_socket < 0) {
+                    std::cerr << "Server: Failed to accept" << std::endl;
+                    continue;
+                }
+                // cout<<"Server: Accepted connection with client "<<sv.noc - users + 1<<endl;
+                ThreadArgs* args = new ThreadArgs{new_socket, &sv,(int)sv.noc + 1 - (int)users};
+                pthread_t thread;
+                pthread_create(&thread, nullptr, handle_client, args);
+                threads.push_back(thread);
+                users--;
+            }
+
+            for (auto& thread : threads) {
+                pthread_join(thread, nullptr);
+            }
+
+            auto end = chrono::high_resolution_clock::now();
+            double time_taken = chrono::duration_cast<chrono::microseconds>(end - start).count();
+            time.push_back({protocol, time_taken});
+        }
+    }
+    close(sv.server_fd);
+    cout<<"Server: Finished"<<endl;
+
+    if(plot){
+        ofstream output("temp.txt");
+        for(size_t i = 0;i<time.size();i++){
+            output<<i+1<<' '<<time[i].second<<' '<<'\n';
+        }
+    }
+    else{
+        for(size_t i = 0;i<time.size();i++){
+            cout<<time[i].first<<' '<<time[i].second;
+            if(i!=time.size()-1)cout<<", ";           
+        }
+        cout<<endl;
     }
 
-    for (auto& thread : threads) {
-        pthread_join(thread, nullptr);
-    }
-    close(server_fd);
-    cout<<"Server: Finished"<<endl;
     return 0;
 
 }

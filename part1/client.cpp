@@ -1,5 +1,5 @@
 #include <iostream>
-#include <nlohmann/json.hpp>
+#include "../json.hpp"
 #include <fstream>
 #include <vector>
 #include <string>
@@ -40,7 +40,7 @@ vector<string> read(int client_id, int offset){
 }
 
 
-void get_data(int client_fd){
+void get_data(int client_fd, bool plot){
     unordered_map<string, size_t> word_count;
     uint32_t count = 0;
     bool eof=true;
@@ -55,9 +55,11 @@ void get_data(int client_fd){
             count++;
         }
     }
-    ofstream output("output.txt");
-    for(const auto& [word, count]:word_count){
-        output<<word<<' '<<count<<'\n';
+    if(!plot){
+        ofstream output("output.txt");
+        for(const auto& [word, count]:word_count){
+            output<<word<<' '<<count<<'\n';
+        }
     }
 }
 
@@ -85,16 +87,26 @@ int create_server(){
 }
 
 
-int main(){
+int main(int argc, char* argv[]){
 
+    bool plot = false;
+    if (argc == 2 && std::strcmp(argv[1], "--plot") == 0) {
+        plot = true;
+    }
     ifstream jso("config.json");
     jso >> json_data;
 
-    int client_socket = create_server();
-    
-    get_data(client_socket);
+    uint16_t p = 1;
 
-    close(client_socket);
-    cout<<"Client: Connection closed"<<endl;
+    do{
+        if(plot){
+            json_data["p"] = p++;
+            json_data["k"] = 10;
+        }
+        int client_socket = create_server();
+        get_data(client_socket, plot);
+        close(client_socket);
+    }while(plot&&p<=10);
+
     return 0;
 }

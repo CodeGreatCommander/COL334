@@ -1,5 +1,5 @@
 #include <iostream>
-#include <nlohmann/json.hpp>
+#include "../json.hpp"
 #include <fstream>
 #include <vector>
 #include <string>
@@ -20,12 +20,31 @@ mutex cout_mutex;
 struct server {
     struct sockaddr_in address;
     int server_fd;
-    uint32_t k, p;
+    uint32_t k, p, num_users;
     vector<string> words;
-    server(string ip, uint16_t port, uint32_t k, uint32_t p, const string& filename, int server_fd) : k(k), p(p), server_fd(server_fd) {
+    server(string ip, uint16_t port, uint32_t k, uint32_t p, const string& filename, uint32_t num_users) : k(k), p(p), server_fd(server_fd), num_users(num_users) {
+        //setup server
+        server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (server_fd == -1) {
+            std::cerr << "Server:Failed to create socket" << std::endl;
+            throw runtime_error("Server:Failed to create socket");
+        }
         address.sin_family = AF_INET;
-        address.sin_port = htons(port); // little endian to big endian
+        address.sin_port = htons(port);//little endian to big endian
         address.sin_addr.s_addr = inet_addr(ip.c_str());
+
+        //bind to the port and listen
+        if(bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0){
+            std::cerr << "Server:Failed to bind" << std::endl;
+            close(server_fd);
+            throw runtime_error("Server:Failed to bind");
+        }
+
+        if(listen(server_fd, 1) < 0){
+            std::cerr << "Server:Failed to listen" << std::endl;
+            close(server_fd);
+            throw runtime_error("Server:Failed to listen");
+        }
         string_parsing(filename);
     }
 
@@ -62,11 +81,11 @@ struct server {
     }
 };
 
-server read_parameters(int& server_fd) {
+server read_parameters() {
     ifstream i("config.json");
     nlohmann::json j;
     i >> j;
-    return server(j["server_ip"], static_cast<uint16_t>(j["server_port"]), j["k"], j["p"], j["filename"], server_fd);
+    return server(j["server_ip"], static_cast<uint16_t>(j["server_port"]), j["k"], j["p"], j["filename"], j["num_clients"]);
 }
 
 struct ThreadArgs {
@@ -127,50 +146,60 @@ void* handle_client(void* args) {
     return nullptr;
 }
 
-int main() {
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd == -1) {
-        std::cerr << "Server: Failed to create socket" << std::endl;
-        return -1;
-    }
-    cout << "Server: Socket created" << endl;
-    server sv = read_parameters(server_fd);
+int main(int argc, char* argv[]) {
 
-    if (bind(sv.server_fd, (struct sockaddr*)&sv.address, sizeof(sv.address)) < 0) {
-        std::cerr << "Server: Failed to bind" << std::endl;
-        return -1;
+    bool plot = false;
+    if (argc == 2 && std::strcmp(argv[1], "--plot") == 0) {
+        plot = true;
     }
+    
+    vector<double> time;
+    server sv = read_parameters();
 
-    if (listen(sv.server_fd, 11) < 0) {
-        std::cerr << "Server: Failed to listen" << std::endl;
-        return -1;
-    }
-    cout << "Server: Binded and Listening" << endl;
 
-    vector<pthread_t> threads;
-    size_t users = 10;
-    while (users) {
-        int addrlen = sizeof(sv.address);
-        int new_socket = accept(sv.server_fd, (struct sockaddr*)&sv.address, (socklen_t*)&addrlen);
-        if (new_socket < 0) {
-            std::cerr << "Server: Failed to accept" << std::endl;
-            continue;
+    for(size_t i = 1,l = plot?32:1;i<=l;i++){
+        vector<pthread_t> threads;
+        
+        auto start = chrono::high_resolution_clock::now();
+
+        size_t users;
+        if(plot)users = i;
+        else users = sv.num_users;
+
+        while (users) {
+            int addrlen = sizeof(sv.address);
+            int new_socket = accept(sv.server_fd, (struct sockaddr*)&sv.address, (socklen_t*)&addrlen);
+            if (new_socket < 0) {
+                std::cerr << "Server: Failed to accept" << std::endl;
+                continue;
+            }
+            if(users == i)start = chrono::high_resolution_clock::now();
+            cout << "Server: New connection accepted with client " << sv.num_users+1 - users << endl;
+            int client_id = static_cast<int>(sv.num_users+1 - users);
+            ThreadArgs* args = new ThreadArgs{new_socket, &sv, client_id};
+            pthread_t thread;
+            pthread_create(&thread, nullptr, handle_client, args);
+            threads.push_back(thread);
+            users--;
         }
-        cout << "Server: New connection accepted with client " << 11 - users << endl;
 
-        ThreadArgs* args = new ThreadArgs{new_socket, &sv,11 - (int)users};
-        pthread_t thread;
-        pthread_create(&thread, nullptr, handle_client, args);
-        threads.push_back(thread);
-        users--;
+        for (auto& thread : threads) {
+            pthread_join(thread, nullptr);
+        }
+
+        auto end = chrono::high_resolution_clock::now();
+        chrono::duration<double> elapsed = end - start;
+        time.push_back(elapsed.count());
     }
-
-    for (auto& thread : threads) {
-        pthread_join(thread, nullptr);
-    }
-
     close(sv.server_fd);
     cout << "Server: Socket closed" << endl;
+
+    if(plot){
+        ofstream output("temp.txt");
+        for(size_t i = 0;i<time.size();i++){
+            output<<i+1<<' '<<time[i]<<' '<<'\n';
+        }
+    }
 
     return 0;
 }

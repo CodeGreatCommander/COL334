@@ -6,18 +6,28 @@ build:
 
 run-aloha:
 	@./exe/server aloha & \
-    sleep 3; \
+    sleep 1; \
     ./exe/client aloha
 
 run-beb:
 	@./exe/server beb & \
-	sleep 3; \
+	sleep 1; \
 	./exe/client beb
 
 run-csma:
 	@./exe/server csma & \
-	sleep 3; \
+	sleep 1; \
 	./exe/client csma
+
+run:
+	@./exe/server --all & \
+	sleep 1; \
+	./exe/client --all
+
+plot:
+	@./exe/server --plot & \
+	sleep 1; \
+	./exe/client --plot
 
 clean:
 	@rm -rf exe output

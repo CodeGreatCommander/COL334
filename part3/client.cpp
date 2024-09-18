@@ -15,13 +15,10 @@
 #include <pthread.h>
 #include <time.h>
 #include <random>
-#include <chrono>
 
 
 
 using namespace std;
-
-double total_time = 0;
 nlohmann::json json_data;
 
 struct ThreadArgs {
@@ -117,7 +114,7 @@ void* get_data(void* args){
     uint32_t count = 0, collision_count = 0;
     bool eof=true;
 
-    auto start = chrono::high_resolution_clock::now();
+    // auto start = chrono::high_resolution_clock::now();
 
     while(eof){
         if(!decide(Tus, protocol, client_fd)) continue;
@@ -135,9 +132,9 @@ void* get_data(void* args){
 
     close(client_fd);
 
-    auto stop = chrono::high_resolution_clock::now();
-    auto duration = chrono::duration_cast<chrono::microseconds>(stop - start);
-    total_time += duration.count();
+    // auto stop = chrono::high_resolution_clock::now();
+    // auto duration = chrono::duration_cast<chrono::microseconds>(stop - start);
+    // total_time += duration.count();
 
     // ofstream output("output/output_"+to_string((int)client_id)+".txt");
     // for(const auto& [word, count]:word_count){
@@ -176,32 +173,45 @@ int main(int argc, char* argv[]){
         cout << "Usage: ./server <protocol>" << endl;
         return 1;
     }
-    string protocol = argv[1];
-    if(protocol != "aloha" && protocol != "beb"&& protocol != "csma"){
-        cout << "Invalid protocol" << endl;
-        return 1;
-    }
-
+    
+    bool plot = std::strcmp(argv[1], "--plot") == 0;
+    bool all = plot || std::strcmp(argv[1], "--all") == 0;
+    
     ifstream jso("config.json");
     jso >> json_data;
 
-    vector<pthread_t> threads;
-    size_t noc = json_data["num_clients"];
+    for(size_t i = 1,l = plot?32:1;i<=l;i++){
+        vector<string> protocols;
+        if(all){
+            protocols = {"aloha", "beb", "csma"};
+        }
+        else{
+            protocols.push_back(argv[1]);
+        }
+        for(string& protocol:protocols){
 
-    for(size_t i = 1;i<=noc;i++){
-        int client_fd = create_server();
+            vector<pthread_t> threads;
+            size_t noc = plot?i:json_data["num_clients"].get<size_t>();
 
-        ThreadArgs* args = new ThreadArgs{i, client_fd, protocol};
-        pthread_t thread;
-        pthread_create(&thread, nullptr, get_data, args);
-        threads.push_back(thread);
+            for(size_t i = 1;i<=noc;i++){
+                int client_fd = create_server();
+
+                ThreadArgs* args = new ThreadArgs{i, client_fd, protocol};
+                pthread_t thread;
+                pthread_create(&thread, nullptr, get_data, args);
+                threads.push_back(thread);
+            }
+
+            for (pthread_t& thread : threads) {
+                pthread_join(thread, nullptr);
+            }
+            // if(!plot){
+            //     cout<<"Average time taken: "<<total_time/noc<<" microseconds";
+            //     if(protocol != protocols.back()) cout<<", ";
+            //     else cout<<endl;
+            // }
+        }
     }
-
-    for (pthread_t& thread : threads) {
-        pthread_join(thread, nullptr);
-    }
-
-    cout<<"Average time taken: "<<total_time/noc<<" microseconds"<<endl;
 
     return 0;
 }
