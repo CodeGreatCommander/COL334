@@ -103,11 +103,10 @@ void* handle_client(void* args) {
     int client_socket = threadArgs->client_socket;
     server& sv = *(threadArgs->sv);
     int client_id = threadArgs->client_id;
-    delete threadArgs; // Free the allocated memory
+    delete threadArgs;
 
     char buffer[1024] = {0};
-    size_t read_count = 0;
-    while (read_count < sv.words.size()) {
+    while (true) {
         int valread = read(client_socket, buffer, 1024);
         if (valread == 0) {
             break;
@@ -131,20 +130,7 @@ void* handle_client(void* args) {
             lock_guard<mutex> lock(cout_mutex);
             cout << "Server: <RECEIVED CLIENT " << client_id << ">: " << message << endl;
         }
-        vector<string> responses = sv.response(stoi(message));
-        for (const string& response : responses) {
-            {
-                lock_guard<mutex> lock(cout_mutex);
-                cout << "Server: <SENT CLIENT " << client_id << ">: " << response << endl;
-            }
-            send(client_socket, response.c_str(), response.size(), 0);
-        }
-        read_count += sv.k;
-    }
-    close(client_socket);
-    {
-        lock_guard<mutex> lock(cout_mutex);
-        cout << "Server (Client " << client_id << "): Connection closed" << endl;
+        
     }
 
     return nullptr;

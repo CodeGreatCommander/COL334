@@ -44,6 +44,7 @@ vector<string> read(int client_id, int offset){
             if(c=='\n'||c==','){
                 if(temp=="HUH"){
                     response.clear();
+                    response.push_back("HUH");
                     return response;
                 }
                 response.push_back(temp);
@@ -56,8 +57,9 @@ vector<string> read(int client_id, int offset){
     return response;
 }
 
-bool decide(long long int Tus, string protocol, int client_fd){
+bool decide(long long int Tus, string protocol, int client_fd, uint32_t& collision_count){
     if(protocol == "aloha"){
+        if(collision_count==0)return true;
         int noc = json_data["num_clients"];
         double p = 1.0/noc;
         int r = rand()%100;
@@ -91,10 +93,10 @@ bool decide(long long int Tus, string protocol, int client_fd){
 }
 
 void collision(long long int Tus, string protocol, uint32_t& count){
+    count++;
     if(protocol == "aloha")
     usleep(Tus);
     else{
-        count++;
         int wait = rand()%(1<<count);
         usleep(Tus*(wait));
     }
@@ -108,7 +110,7 @@ void* get_data(void* args){
     string protocol = threadArgs->protocol;
 
     double T = json_data["T"];
-    long long int Tus = T*1000000;
+    long long int Tus = T*1000;
     
     unordered_map<string, size_t> word_count;
     uint32_t count = 0, collision_count = 0;
@@ -117,9 +119,12 @@ void* get_data(void* args){
     // auto start = chrono::high_resolution_clock::now();
 
     while(eof){
-        if(!decide(Tus, protocol, client_fd)) continue;
+        if(!decide(Tus, protocol, client_fd, collision_count)) continue;
         vector<string> response = read(client_fd, count);
         if(response.empty()){
+            continue;
+        }
+        else if(response[0]=="HUH"){
             collision(Tus, protocol, collision_count);
         }
         for(const string& word:response){
@@ -192,6 +197,7 @@ int main(int argc, char* argv[]){
 
             vector<pthread_t> threads;
             size_t noc = plot?i:json_data["num_clients"].get<size_t>();
+            json_data["num_clients"] = noc;
 
             for(size_t i = 1;i<=noc;i++){
                 int client_fd = create_server();

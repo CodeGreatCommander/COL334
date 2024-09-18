@@ -3,5 +3,5 @@
     "server_port": 8080,
     "filename": "sample_text.txt",
     "num_clients": 10,
-    "T": 0.1
+    "T": 10
 }
