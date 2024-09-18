@@ -1,6 +1,6 @@
 #include <iostream>
 #include <fstream>
-#include <nlohmann/json.hpp>
+#include "../json.hpp"
 #include <vector>
 #include <string>
 #include <sstream>

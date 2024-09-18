@@ -11,12 +11,15 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <queue>
+#include <unordered_map>
 #include <mutex>
 
 using namespace std;
 
 mutex cout_mutex;
 mutex queue_mutex;
+bool state = true;
 
 struct server {
     struct sockaddr_in address;
@@ -79,8 +82,9 @@ struct ThreadArgs {
 
 struct Queue {
     queue<pair<int, string>> message_queue;
+    unordered_map<int, uint32_t> client_count;
     string protocol;
-    Queue(string protocol): protocol(protocol) {}
+    Queue() {}
     void push(int client_id, string message) {
         lock_guard<mutex> lock(queue_mutex);
         message_queue.push({client_id, message});
@@ -96,7 +100,7 @@ struct Queue {
         lock_guard<mutex> lock(queue_mutex);
         return message_queue.empty();
     }
-}
+} packet_queue;
 
 void* handle_client(void* args) {
     ThreadArgs* threadArgs = static_cast<ThreadArgs*>(args);
@@ -113,7 +117,6 @@ void* handle_client(void* args) {
         } else if (valread < 0) {
             std::cerr << "Server: Failed to read" << std::endl;
             close(client_socket);
-            close(sv.server_fd);
             return nullptr;
         }
         string message = "";
@@ -125,16 +128,40 @@ void* handle_client(void* args) {
             }
             message.push_back(c);
         }
-        if (!end) continue;
-        {
-            lock_guard<mutex> lock(cout_mutex);
-            cout << "Server: <RECEIVED CLIENT " << client_id << ">: " << message << endl;
+        if (end) {
+            packet_queue.push(client_socket, message);
+            continue;
         }
-        
     }
 
     return nullptr;
 }
+
+struct queue_handle_args {
+    server* sv;
+};
+
+void* queue_handle(void* args){
+
+    queue_handle_args *queue_args = static_cast<queue_handle_args*>(args);
+    server& sv = *(queue_args->sv);
+
+    while(state){
+        if(packet_queue.empty()){
+            continue;
+        }
+        pair<int, string> message = packet_queue.pop();
+        int client_socket = message.first;
+        string message_content = message.second;
+        cout<<"Server: Sending response to client "<<client_socket<<" "<<message_content<<endl;
+        vector<string> response = sv.response(stoi(message_content));
+        for (const string& line : response) {
+            send(client_socket, line.c_str(), line.size(), 0);
+        }
+    }
+    return nullptr;
+}
+
 
 int main() {
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -154,7 +181,6 @@ int main() {
         std::cerr << "Server: Failed to listen" << std::endl;
         return -1;
     }
-    cout << "Server: Binded and Listening" << endl;
 
     vector<pthread_t> threads;
     size_t users = 10;
@@ -173,10 +199,14 @@ int main() {
         threads.push_back(thread);
         users--;
     }
-
+    pthread_t queue_thread;
+    queue_handle_args queue_args{&sv};
+    pthread_create(&queue_thread, nullptr, queue_handle, &queue_args);
     for (auto& thread : threads) {
         pthread_join(thread, nullptr);
     }
+    state = false;
+    pthread_join(queue_thread, nullptr);
 
     close(sv.server_fd);
     cout << "Server: Socket closed" << endl;
