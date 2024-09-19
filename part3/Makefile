@@ -13,7 +13,7 @@ run-beb:
 	sleep 1; \
 	./exe/client beb
 
-run-csma:
+run-cscd:
 	@./exe/server csma & \
 	sleep 1; \
 	./exe/client csma
@@ -22,6 +22,22 @@ run:
 	@./exe/server --all & \
 	sleep 1; \
 	./exe/client --all
+
+server-aloha:
+	@./exe/server aloha
+
+server-beb:
+	@./exe/server beb
+
+server-cscd:
+	@./exe/server csma
+
+client-aloha:
+	@./exe/client aloha
+
+client-beb:
+	@./exe/client beb
+
 
 plot:
 	@./exe/server --plot & \

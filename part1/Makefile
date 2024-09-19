@@ -15,6 +15,12 @@ plot:
 	@python3 analysis.py
 	@rm temp.txt
 
+server:
+	@./exe/server
+
+client:
+	@./exe/client
+
 clean:
 	rm -rf exe
 	rm -f output.txt

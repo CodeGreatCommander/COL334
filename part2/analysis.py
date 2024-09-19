@@ -15,10 +15,10 @@ values = [item[1] for item in data]
 
 # Plot the data
 plt.figure(figsize=(10, 5))
-plt.plot(indices, values, marker='o', linestyle='-', color='b', label='Values')
-plt.xlabel('Index')
-plt.ylabel('Value')
-plt.title('Values from temp.txt')
+plt.plot(indices, values, marker='o', linestyle='-', color='b', label='Time')
+plt.xlabel('No of Clients')
+plt.ylabel('Average Time (s)')
+plt.title('Performance Analysis')
 plt.legend()
 plt.grid(True)
 plt.savefig('plot.png')

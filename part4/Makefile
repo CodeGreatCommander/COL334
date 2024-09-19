@@ -18,6 +18,18 @@ run:
 	sleep 1; \
 	./exe/client --all
 
+server-fifo:
+	@./exe/server fifo
+
+server-rr:
+	@./exe/server rr
+
+client-fifo:
+	@./exe/client fifo
+
+client-rr:
+	@./exe/client rr
+
 plot:
 	@./exe/server --plot & \
 	sleep 1; \
