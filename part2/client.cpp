@@ -102,7 +102,7 @@ void *get_data(void *args)
     close(client_fd);
     if (!plot)
     {
-        ofstream output("output/output_" + to_string((int)client_id) + ".txt");
+        ofstream output("./output_" + to_string((int)client_id) + ".txt");
         for (const auto &[word, count] : word_count)
         {
             output << word << ", " << count << '\n';

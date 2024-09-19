@@ -1,0 +1,16 @@
+And, 1
+Hickory, 4
+The, 5
+clock, 4
+dickory, 4
+dock, 4
+down, 2
+flew, 1
+he, 1
+mouse, 3
+one, 1
+ran, 3
+struck, 2
+the, 2
+two, 1
+up, 2
