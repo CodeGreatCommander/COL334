@@ -48,33 +48,37 @@ struct server {
         string_parsing(filename);
     }
 
-    void string_parsing(const string& filename) {
+    void string_parsing(const string& filename){
         ifstream file_input(filename);
         string line;
-        while (getline(file_input, line)) {
+        while(getline(file_input, line)){
             stringstream ss(line);
             string word;
-            while (ss >> word) {
+            while(getline(ss, word, ',')){
+                word.push_back(',');
                 words.push_back(word);
             }
         }
-        words.push_back("EOF");
     }
 
-    vector<string> response(size_t offset) {
+    vector<string> response(size_t offset){
         vector<string> response;
         string temp;
-        for (size_t i = offset; i < min(offset + k, words.size()); i++) {
-            temp += words[i];
-            if ((i - offset + 1) % p == 0 || i == words.size() - 1) {
+        for(size_t i=offset;i<min(offset+k,words.size());i++){
+            temp+=words[i];
+            if(i==words.size()-1){
+                temp.append("EOF\n");
+                response.push_back(temp);
+                temp.clear();
+            }
+            else if((i-offset+1)%p==0){
                 temp.push_back('\n');
                 response.push_back(temp);
                 temp.clear();
-            } else {
-                temp.push_back(',');
             }
         }
-        if (!temp.empty()) {
+        if(!temp.empty()){
+            temp.push_back('\n');
             response.push_back(temp);
         }
         return response;
@@ -85,7 +89,7 @@ server read_parameters() {
     ifstream i("config.json");
     nlohmann::json j;
     i >> j;
-    return server(j["server_ip"], static_cast<uint16_t>(j["server_port"]), j["k"], j["p"], j["filename"], j["num_clients"]);
+    return server(j["server_ip"], static_cast<uint16_t>(j["server_port"]), j["k"], j["p"], j["input_file"], j["num_clients"]);
 }
 
 struct ThreadArgs {
@@ -123,25 +127,26 @@ void* handle_client(void* args) {
             message.push_back(c);
         }
         if (!end) continue;
-        {
-            lock_guard<mutex> lock(cout_mutex);
-            cout << "Server: <RECEIVED CLIENT " << client_id << ">: " << message << endl;
-        }
+        // {
+        //     lock_guard<mutex> lock(cout_mutex);
+        //     cout << "Server: <RECEIVED CLIENT " << client_id << ">: " << message << endl;
+        // }
         vector<string> responses = sv.response(stoi(message));
         for (const string& response : responses) {
-            {
-                lock_guard<mutex> lock(cout_mutex);
-                cout << "Server: <SENT CLIENT " << client_id << ">: " << response << endl;
-            }
+            // {
+            //     lock_guard<mutex> lock(cout_mutex);
+            //     cout<< sv.p <<endl;
+            //     cout << "Server: <SENT CLIENT " << client_id << ">: " << response << endl;
+            // }
             send(client_socket, response.c_str(), response.size(), 0);
         }
         read_count += sv.k;
     }
     close(client_socket);
-    {
-        lock_guard<mutex> lock(cout_mutex);
-        cout << "Server (Client " << client_id << "): Connection closed" << endl;
-    }
+    // {
+    //     lock_guard<mutex> lock(cout_mutex);
+    //     cout << "Server (Client " << client_id << "): Connection closed" << endl;
+    // }
 
     return nullptr;
 }
@@ -160,7 +165,6 @@ int main(int argc, char* argv[]) {
     for(size_t i = 1,l = plot?32:1;i<=l;i++){
         vector<pthread_t> threads;
         
-        auto start = chrono::high_resolution_clock::now();
 
         size_t users;
         if(plot)users = i;
@@ -173,8 +177,7 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Server: Failed to accept" << std::endl;
                 continue;
             }
-            if(users == i)start = chrono::high_resolution_clock::now();
-            cout << "Server: New connection accepted with client " << sv.num_users+1 - users << endl;
+            // cout << "Server: New connection accepted with client " << sv.num_users+1 - users << endl;
             int client_id = static_cast<int>(sv.num_users+1 - users);
             ThreadArgs* args = new ThreadArgs{new_socket, &sv, client_id};
             pthread_t thread;
@@ -186,20 +189,9 @@ int main(int argc, char* argv[]) {
         for (auto& thread : threads) {
             pthread_join(thread, nullptr);
         }
-
-        auto end = chrono::high_resolution_clock::now();
-        chrono::duration<double> elapsed = end - start;
-        time.push_back(elapsed.count());
     }
     close(sv.server_fd);
-    cout << "Server: Socket closed" << endl;
-
-    if(plot){
-        ofstream output("temp.txt");
-        for(size_t i = 0;i<time.size();i++){
-            output<<i+1<<' '<<time[i]<<' '<<'\n';
-        }
-    }
+    // cout << "Server: Socket closed" << endl;
 
     return 0;
 }

@@ -30,6 +30,14 @@ struct server {
             std::cerr << "Server:Failed to create socket" << std::endl;
             throw runtime_error("Server:Failed to create socket");
         }
+
+        int opt = 1;
+        if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+            std::cerr << "Failed to set SO_REUSEADDR" << std::endl;
+            close(server_fd);
+            throw runtime_error("Failed to set SO_REUSEADDR");
+        }
+
         address.sin_family = AF_INET;
         address.sin_port = htons(port);//little endian to big endian
         address.sin_addr.s_addr = inet_addr(ip.c_str());
@@ -49,38 +57,37 @@ struct server {
         string_parsing(filename);
     }
 
-    void string_parsing(const string& filename) {
+    void string_parsing(const string& filename){
         ifstream file_input(filename);
         string line;
-        while (getline(file_input, line)) {
+        while(getline(file_input, line)){
             stringstream ss(line);
             string word;
-            while (ss >> word) {
-                if(word.size())
+            while(getline(ss, word, ',')){
+                word.push_back(',');
                 words.push_back(word);
             }
         }
-        words.push_back("EOF");
     }
 
-    vector<string> response(size_t offset) {
+    vector<string> response(size_t offset){
         vector<string> response;
         string temp;
-        if(offset >= words.size()){
-            response.push_back("$$\n");
-            return response;
-        }
-        for (size_t i = offset; i < min(offset + k, words.size()); i++) {
-            temp += words[i];
-            if ((i - offset + 1) % p == 0 || i == words.size() - 1) {
+        for(size_t i=offset;i<min(offset+k,words.size());i++){
+            temp+=words[i];
+            if(i==words.size()-1){
+                temp.append("EOF\n");
+                response.push_back(temp);
+                temp.clear();
+            }
+            else if((i-offset+1)%p==0){
                 temp.push_back('\n');
                 response.push_back(temp);
                 temp.clear();
-            } else {
-                temp.push_back(',');
             }
         }
-        if (!temp.empty()) {
+        if(!temp.empty()){
+            temp.push_back('\n');
             response.push_back(temp);
         }
         return response;
@@ -91,7 +98,7 @@ server read_parameters() {
     ifstream i("config.json");
     nlohmann::json j;
     i >> j;
-    return server(j["server_ip"], static_cast<uint16_t>(j["server_port"]), k, p, j["filename"], j["num_clients"]);
+    return server(j["server_ip"], static_cast<uint16_t>(j["server_port"]), k, p, j["input_file"], j["num_clients"]);
 }
 
 string read_message(char buffer[1024]){
@@ -116,15 +123,16 @@ void* handle_client(void* args) {
     int client_id = threadArgs->client_id;
     delete threadArgs;
 
-    size_t words_send = 0;
-    char buffer[1024]={0};
-    while(words_send<sv.words.size()){
-        read(client_socket, buffer, 1024);
+    bool eof = false;
+    while(!eof){
+        char buffer[1024]={0};
+        int valread = read(client_socket, buffer, 1024);
+        if(valread == 0){
+            break;
+        }
         string message=read_message(buffer);
-        // cout<<"Client "<<client_id<<":"<<message<<endl;
         if(message == "BUSY?"){
             if(sv.use){
-                // cout<<"Server:BUSY"<<endl;
                 message = "BUSY\n";
                 send(client_socket, message.c_str(), message.size(), 0);
             }
@@ -137,16 +145,16 @@ void* handle_client(void* args) {
         }
         if(sv.use){
             sv.collision=true;
-            message = "HUH\n";
+            message = "HUH!\n";
             send(client_socket, message.c_str(), message.size(), 0);
             continue;
         }
         sv.use = true;
-        vector<string> response = sv.response(words_send);
+        vector<string> response = sv.response(stoi(message));
         for(const string& s: response){
             if(sv.collision){
                 // cout<<"Server:HUH"<<endl;
-                message = "HUH\n";
+                message = "HUH!\n";
                 send(client_socket, message.c_str(), message.size(), 0);
                 sv.collision = false;
                 sv.use = false;
@@ -157,11 +165,12 @@ void* handle_client(void* args) {
         }
         if(sv.use){
             sv.use = false;
-            words_send += sv.k;
+            if(response.size()&&response.back()=="EOF\n"){
+                eof = true;
+            }
         }
     }
     close(client_socket);
-    // cout<<"Server: Client "<<client_id<<" finished"<<endl;
     return nullptr;
 }
 
@@ -194,8 +203,6 @@ int main(int argc, char* argv[]) {;
             sv.noc = plot?i:sv.noc;
             size_t users = sv.noc;
 
-            auto start = chrono::high_resolution_clock::now();
-
             while (users) {
                 int addrlen = sizeof(sv.address);
                 int new_socket = accept(sv.server_fd, NULL, NULL);
@@ -214,28 +221,9 @@ int main(int argc, char* argv[]) {;
             for (auto& thread : threads) {
                 pthread_join(thread, nullptr);
             }
-
-            auto end = chrono::high_resolution_clock::now();
-            double time_taken = chrono::duration_cast<chrono::microseconds>(end - start).count();
-            time.push_back({protocol, time_taken});
         }
     }
     close(sv.server_fd);
-    cout<<"Server: Finished"<<endl;
-
-    if(plot){
-        ofstream output("temp.txt");
-        for(size_t i = 0;i<time.size();i++){
-            output<<i+1<<' '<<time[i].second<<' '<<'\n';
-        }
-    }
-    else{
-        for(size_t i = 0;i<time.size();i++){
-            cout<<time[i].first<<' '<<time[i].second;
-            if(i!=time.size()-1)cout<<", ";           
-        }
-        cout<<endl;
-    }
 
     return 0;
 

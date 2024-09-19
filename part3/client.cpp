@@ -15,11 +15,14 @@
 #include <pthread.h>
 #include <time.h>
 #include <random>
+#include <chrono>
+#include <map>
 
 
 
 using namespace std;
 nlohmann::json json_data;
+map<string, map<int,double>> time_taken;
 
 struct ThreadArgs {
     size_t client_id;
@@ -32,27 +35,34 @@ vector<string> read(int client_id, int offset){
     string message = to_string(offset)+"\n";
     send(client_id, message.c_str(), message.size(), 0);
     
-    int k = 10;
+    int k = json_data["k"];
     while(k>0){
         char buffer[1024] = {0};
         int valread = read(client_id, buffer, 1024);
         if(valread == 0){
             break;
         }
+        else if(valread == -1){
+            cout<<"Error in reading"<<endl;
+            break;
+        }
         string temp;
         for(const char& c:buffer){
-            if(c=='\n'||c==','){
-                if(temp=="HUH"){
+            if(c==','){response.push_back(temp);temp.clear();k--;}
+            else if(c=='\n'){
+                if(temp=="EOF"){
+                    response.push_back(temp);
+                    break;
+                }
+                else if(temp=="HUH!"){
                     response.clear();
-                    response.push_back("HUH");
+                    response.push_back("HUH!");
                     return response;
                 }
-                response.push_back(temp);
-                temp.clear();
-                k--;
             }
             else temp.push_back(c);
         }
+        if(temp=="EOF")break;
     }
     return response;
 }
@@ -108,6 +118,7 @@ void* get_data(void* args){
     size_t client_id = threadArgs->client_id;
     int client_fd = threadArgs->server_socket;
     string protocol = threadArgs->protocol;
+    auto start = chrono::high_resolution_clock::now();
 
     double T = json_data["T"];
     long long int Tus = T*1000;
@@ -116,7 +127,6 @@ void* get_data(void* args){
     uint32_t count = 0, collision_count = 0;
     bool eof=true;
 
-    // auto start = chrono::high_resolution_clock::now();
 
     while(eof){
         if(!decide(Tus, protocol, client_fd, collision_count)) continue;
@@ -124,10 +134,11 @@ void* get_data(void* args){
         if(response.empty()){
             continue;
         }
-        else if(response[0]=="HUH"){
+        else if(response[0]=="HUH!"){
             collision(Tus, protocol, collision_count);
+            continue;
         }
-        for(const string& word:response){
+        for(const string& word:response){   
             if(word=="EOF"){eof = false;break;}
             word_count[word]++;
             count++;
@@ -136,15 +147,9 @@ void* get_data(void* args){
     }
 
     close(client_fd);
-
-    // auto stop = chrono::high_resolution_clock::now();
-    // auto duration = chrono::duration_cast<chrono::microseconds>(stop - start);
-    // total_time += duration.count();
-
-    // ofstream output("output/output_"+to_string((int)client_id)+".txt");
-    // for(const auto& [word, count]:word_count){
-    //     output<<word<<' '<<count<<'\n';
-    // }
+    auto end = chrono::high_resolution_clock::now();
+    chrono::duration<double> elapsed = end - start;
+    time_taken[protocol][json_data["num_clients"]]+=elapsed.count();
     return nullptr;
 }
 
@@ -194,10 +199,13 @@ int main(int argc, char* argv[]){
             protocols.push_back(argv[1]);
         }
         for(string& protocol:protocols){
+            sleep(1);
+            cout<<"Protocol: "<<protocol<<" "<<i<<endl;
 
             vector<pthread_t> threads;
             size_t noc = plot?i:json_data["num_clients"].get<size_t>();
             json_data["num_clients"] = noc;
+            time_taken[protocol][json_data["num_clients"]]=0;
 
             for(size_t i = 1;i<=noc;i++){
                 int client_fd = create_server();
@@ -211,13 +219,22 @@ int main(int argc, char* argv[]){
             for (pthread_t& thread : threads) {
                 pthread_join(thread, nullptr);
             }
-            // if(!plot){
-            //     cout<<"Average time taken: "<<total_time/noc<<" microseconds";
-            //     if(protocol != protocols.back()) cout<<", ";
-            //     else cout<<endl;
-            // }
         }
     }
+    if(!plot){
+        for(auto& x:time_taken){
+            for(auto& y:x.second)
+            cout<<x.first<<", "<<y.second/y.first<<endl;
+        }
+    }
+    else{
+        ofstream output("temp.txt");
+        for(const auto& x:time_taken){
+            for(auto& y:x.second)
+            output<<x.first<<", "<<y.first<<", "<<y.second/y.first<<endl;
+        }
+    }
+
 
     return 0;
 }

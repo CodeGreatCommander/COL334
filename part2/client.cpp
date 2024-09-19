@@ -5,7 +5,7 @@
 #include <string>
 #include <sstream>
 #include <cstring>
-#include <unordered_map>
+#include <map>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -13,12 +13,15 @@
 #include <unistd.h>
 #include <mutex>
 #include <pthread.h>
+#include <chrono>
+
 
 using namespace std;
 
 mutex cout_mutex;
 nlohmann::json json_data;
 bool plot;
+map<int, double> time_taken;
 
 struct ThreadArgs {
     size_t client_id;
@@ -39,9 +42,16 @@ vector<string> read(int client_id, int offset){
         }
         string temp;
         for(const char& c:buffer){
-            if(c=='\n'||c==','){response.push_back(temp);temp.clear();k--;}
+            if(c==','){response.push_back(temp);temp.clear();k--;}
+            else if(c=='\n'){
+                if(temp=="EOF"){
+                    response.push_back(temp);
+                    break;
+                }
+            }
             else temp.push_back(c);
         }
+        if(temp=="EOF")break;
     }
     return response;
 }
@@ -51,8 +61,8 @@ void* get_data(void* args){
     size_t client_id = threadArgs->client_id;
     int client_fd = threadArgs->server_socket;
 
-    
-    unordered_map<string, size_t> word_count;
+    auto start = chrono::high_resolution_clock::now();
+    map<string, size_t> word_count;
     uint32_t count = 0;
     bool eof=true;
     while(eof){
@@ -68,12 +78,15 @@ void* get_data(void* args){
     }
 
     close(client_fd);
-    if(plot){
+    if(!plot){
         ofstream output("output/output_"+to_string((int)client_id)+".txt");
         for(const auto& [word, count]:word_count){
-            output<<word<<' '<<count<<'\n';
+            output<<word<<", "<<count<<'\n';
         }
     }
+    auto end = chrono::high_resolution_clock::now();
+    chrono::duration<double> elapsed = end - start;
+    time_taken[json_data["num_clients"]]+=elapsed.count();
     return nullptr;
 }
 
@@ -118,6 +131,9 @@ int main(int argc, char* argv[]) {
         if(plot) noc = i;
         else noc = json_data["num_clients"];
 
+        json_data["num_clients"] = noc;
+        time_taken[noc] = 0;
+
         for (size_t i = 1; i <= noc ; i++) {
             int client_fd = create_server();
 
@@ -131,5 +147,13 @@ int main(int argc, char* argv[]) {
             pthread_join(thread, nullptr);
         }
     }
+
+    if(plot){
+        ofstream output("temp.txt");
+        for(const auto& [clients, time]:time_taken){
+            output<<clients<<", "<<time/clients<<'\n';
+        }
+    }
+
     return 0;
 }

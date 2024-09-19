@@ -1,6 +1,5 @@
 build:
 	@mkdir -p exe
-	@mkdir -p output
 	g++ -g -o exe/server server.cpp
 	g++ -g -o exe/client client.cpp
 
@@ -28,6 +27,8 @@ plot:
 	@./exe/server --plot & \
 	sleep 1; \
 	./exe/client --plot
+	@python3 analysis.py
+	@rm -f temp.txt
 
 clean:
 	@rm -rf exe output

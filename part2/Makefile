@@ -13,8 +13,10 @@ plot:
 	@./exe/server --plot &\
 	sleep 1; \
 	./exe/client --plot
+	@python3 analysis.py
+	@rm temp.txt
 
 clean:
 	rm -rf exe
-	rm output.txt
+	rm -rf output
 	rm plot.png

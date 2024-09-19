@@ -5,7 +5,7 @@
 #include <string>
 #include <sstream>
 #include <cstring>
-#include <unordered_map>
+#include <map>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -32,16 +32,23 @@ vector<string> read(int client_id, int offset){
         }
         string temp;
         for(const char& c:buffer){
-            if(c=='\n'||c==','){response.push_back(temp);temp.clear();k--;}
+            if(c==','){response.push_back(temp);temp.clear();k--;}
+            else if(c=='\n'){
+                if(temp=="EOF"){
+                    response.push_back(temp);
+                    break;
+                }
+            }
             else temp.push_back(c);
         }
+        if(temp=="EOF")break;
     }
     return response;
 }
 
 
 void get_data(int client_fd, bool plot){
-    unordered_map<string, size_t> word_count;
+    map<string, size_t> word_count;
     uint32_t count = 0;
     bool eof=true;
     while(eof){
@@ -58,7 +65,7 @@ void get_data(int client_fd, bool plot){
     if(!plot){
         ofstream output("output.txt");
         for(const auto& [word, count]:word_count){
-            output<<word<<' '<<count<<'\n';
+            output<<word<<", "<<count<<'\n';
         }
     }
 }
@@ -99,13 +106,16 @@ int main(int argc, char* argv[]){
     uint16_t p = 1;
 
     do{
-        if(plot){
-            json_data["p"] = p++;
-            json_data["k"] = 10;
+        for(size_t _ = 0, _e = plot?10:1; _ < _e;_++){
+            if(plot){
+                json_data["p"] = p;
+                json_data["k"] = 10;
+            }
+            int client_socket = create_server();
+            get_data(client_socket, plot);
+            close(client_socket);
         }
-        int client_socket = create_server();
-        get_data(client_socket, plot);
-        close(client_socket);
+        p++;
     }while(plot&&p<=10);
 
     return 0;

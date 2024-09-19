@@ -3,5 +3,6 @@
     "server_port": 8080,
     "k": 10,
     "p": 5,
-    "filename": "sample_text.txt"
+    "input_file": "sample_text.txt",
+    "num_clients": 1
 }
