@@ -1,8 +1,8 @@
 from ryu.base.app_manager import RyuApp
 from ryu.controller import ofp_event
-from ryu.controller.handler import MAIN_DISPATCHER
+from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.ofproto import ofproto_v1_0
+from ryu.ofproto import ofproto_v1_0, ofproto_v1_3
 from ryu.lib.mac import haddr_to_bin
 from ryu.lib import addrconv
 from ryu.lib.packet import packet_base, packet_utils
@@ -68,7 +68,7 @@ class CustomTLV:
         return tlv_type_length_bytes + self.tlv_value
 
 class SPR_Switch(RyuApp):
-    OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
+    OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION, ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(SPR_Switch, self).__init__(*args, **kwargs)
@@ -79,23 +79,45 @@ class SPR_Switch(RyuApp):
         self.dpids_datapath = {}
         self.adj = {}
         self.delay = {}
+        self.controller_delay = {}
         self.change = False
     
     #Self Learning Switch
 
-    def add_flow(self, datapath, in_port, dst, src, actions):
+    def add_flow_0(self, datapath, priority, match , actions):
         ofproto = datapath.ofproto
-
-        match = datapath.ofproto_parser.OFPMatch(
-            in_port=in_port,
-            dl_dst=dst, dl_src=src)
-
         mod = datapath.ofproto_parser.OFPFlowMod(
             datapath=datapath, match=match, cookie=0,
-            command=ofproto.OFPFC_ADD, idle_timeout=0, hard_timeout=0,
-            priority=ofproto.OFP_DEFAULT_PRIORITY,
+            command=ofproto.OFPFC_ADD, idle_timeout=2, hard_timeout=15,
+            priority=priority,
             flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions)
         datapath.send_msg(mod)
+    
+    def add_flow_3(self, datapath, priority, match, actions, buffer_id=None):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
+                                             actions)]
+        if buffer_id:
+            mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
+                                    priority=priority, match=match,
+                                    instructions=inst)
+        else:
+            mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
+                                    match=match, instructions=inst)
+        datapath.send_msg(mod)
+
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        datapath = ev.msg.datapath
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        if(ofproto.OFP_VERSION==ofproto_v1_0.OFP_VERSION):
+            return
+        match = parser.OFPMatch()
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
+                                          ofproto.OFPCML_NO_BUFFER)]
+        self.add_flow_3(datapath, 0, match, actions)  
         
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -105,7 +127,7 @@ class SPR_Switch(RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        in_port = msg.in_port
+        in_port = msg.in_port if ofproto.OFP_VERSION == ofproto_v1_0.OFP_VERSION else msg.match['in_port']
 
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
@@ -127,7 +149,16 @@ class SPR_Switch(RyuApp):
 
         if dst in self.mac_to_port[dpid]:
             actions = [parser.OFPActionOutput(self.mac_to_port[dpid][dst])]
-            self.add_flow(datapath, in_port, dst, src, actions)
+            if(ofproto.OFP_VERSION==ofproto_v1_0.OFP_VERSION):
+                match = match = datapath.ofproto_parser.OFPMatch(
+                in_port=in_port,
+                dl_dst=dst, dl_src=src)
+                self.add_flow_0(datapath, ofproto.OFP_DEFAULT_PRIORITY, match, actions)
+            else:
+                match = datapath.ofproto_parser.OFPMatch(
+                    in_port=in_port,
+                    eth_dst=dst, eth_src=src)
+                self.add_flow_3(datapath, ofproto.OFP_DEFAULT_PRIORITY, match, actions)
         else:
             actions = []
             
@@ -155,7 +186,9 @@ class SPR_Switch(RyuApp):
         self.sw_dpids.add(ev.switch.dp.id)
         self.dpids_datapath[ev.switch.dp.id] = ev.switch.dp
         self.adj[ev.switch.dp.id] = set()
+        self.send_echo_request(ev.switch.dp)
         self.change = True
+
     @set_ev_cls(event.EventSwitchLeave)
     def remove_switch(self,ev):
         removed_switch = ev.switch.dp.id
@@ -165,6 +198,7 @@ class SPR_Switch(RyuApp):
         for switch in self.adj:
             self.adj[switch].discard(removed_switch)
         self.change = True
+
     @set_ev_cls(event.EventLinkAdd)
     def link_add(self,ev):
         self.adj[ev.link.src.dpid].add((ev.link.dst.dpid, ev.link.src.port_no, ev.link.dst.port_no))
@@ -197,7 +231,10 @@ class SPR_Switch(RyuApp):
         for switch in self.adj:
             adj[switch] = set()
             for link in self.adj[switch]:
-                adj[switch].add((link[0],link[1],link[2],self.delay[(switch,link[1])][0]/self.delay[(switch,link[1])][1] if (switch,link[1]) in self.delay else 1e9))
+                delay = self.delay[(link[0],link[2])][0]/self.delay[(link[0],link[2])][1] if (link[0],link[2]) in self.delay else 100
+                delay -= self.controller_delay[switch][0]/self.controller_delay[switch][1] if switch in self.controller_delay else 0
+                delay -= self.controller_delay[link[0]][0]/self.controller_delay[link[0]][1] if link[0] in self.controller_delay else 0
+                adj[switch].add((link[0],link[1],link[2], delay))
         self.logger.info(adj)
         self.blocked_ports = dijstra_structure(self.sw_dpids, adj)
         self.logger.info(self.blocked_ports)
@@ -247,7 +284,30 @@ class SPR_Switch(RyuApp):
                 if((src_id,src_port) not in self.delay):
                     self.delay[(src_id,src_port)] = (time.time() - tlv_value, 1)
                 else:
-                    self.delay[pair] = (self.delay[pair][0] + (time.time() - tlv_value)/2, self.delay[pair][1]+1)
-                print("LLDP", self.delay)
+                    self.delay[pair] = (self.delay[pair][0] + (time.time() - tlv_value), self.delay[pair][1]+1)
+                if(self.delay[pair][1]%5==0):
+                    self.change = True
+    
+    #echo handler
+
+    def send_echo_request(self, datapath):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        for i in range(10):
+            echo_req = parser.OFPEchoRequest(datapath, data=str(time.time()).encode('utf-8'))
+            datapath.send_msg(echo_req)
+
+    @set_ev_cls(ofp_event.EventOFPEchoReply, MAIN_DISPATCHER)
+    def echo_reply_handler(self, ev):
+        datapath = ev.msg.datapath
+        latency = (time.time() - float(ev.msg.data))/2
+        dpid = datapath.id
+        # self.echo_latency[datapath.id] = latency
+        if(dpid not in self.controller_delay):
+            self.controller_delay[dpid] = (latency, 1)
+        else:
+            self.controller_delay[dpid] = (self.controller_delay[dpid][0] + latency, self.controller_delay[dpid][1]+1)
+        if(self.controller_delay[dpid][1]%5==0):
+            self.change = True
 
             

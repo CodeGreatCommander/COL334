@@ -9,10 +9,10 @@ from mininet.cli import CLI
 class CustomTopo(Topo):
     def build(self):
         # Create four switches
-        s1 = self.addSwitch('s1', protocols='OpenFlow10')
-        s2 = self.addSwitch('s2', protocols='OpenFlow10')
-        s3 = self.addSwitch('s3', protocols='OpenFlow10')
-        s4 = self.addSwitch('s4', protocols='OpenFlow10')
+        s1 = self.addSwitch('s1', protocols='OpenFlow13')
+        s2 = self.addSwitch('s2', protocols='OpenFlow13')
+        s3 = self.addSwitch('s3', protocols='OpenFlow13')
+        s4 = self.addSwitch('s4', protocols='OpenFlow13')
 
         # Create four hosts, one for each switch
         h1 = self.addHost('h1')
@@ -29,8 +29,8 @@ class CustomTopo(Topo):
         # Add links between switches in a cycle with 20 Mbps bandwidth
         self.addLink(s1, s2, bw=2, delay='20ms',cls=TCLink)
         self.addLink(s2, s3, bw=2, delay='10ms', cls=TCLink)
-        self.addLink(s3, s4, bw=1, delay='20ms', cls=TCLink)
-        self.addLink(s4, s1, bw=1, delay='15ms', cls=TCLink)
+        self.addLink(s3, s4, bw=2, delay='20ms', cls=TCLink)
+        self.addLink(s4, s1, bw=2, delay='15ms', cls=TCLink)
 
 def run():
     # Initialize the network with the custom topology
