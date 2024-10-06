@@ -11,6 +11,7 @@ from ryu.topology import event, switches
 from ryu.topology.api import get_switch, get_link
 
 import time
+import eventlet
 
 from collections import deque, Counter
 from heapq import heappush, heappop
@@ -77,10 +78,41 @@ class SPR_Switch(RyuApp):
         self.blocked_ports = {}
         self.sw_dpids = set()
         self.dpids_datapath = {}
+        self.sw_port_hw_addr = {}
         self.adj = {}
         self.delay = {}
         self.controller_delay = {}
         self.change = False
+        self.counter = 0
+        self.running = False
+
+        self.calcualte_lldp()
+    
+    def calcualte_lldp(self):
+        self.running = True
+        self.handle_topo_change()
+        sw_dpids_copy = self.sw_dpids.copy()
+        for switch in sw_dpids_copy:
+            for i in range(10):
+                datapath = self.dpids_datapath[switch]
+                self.send_echo_request(datapath)
+                for neighbor in self.adj[switch]:
+                    src_port_no, src_port_hw = neighbor[1], self.sw_port_hw_addr[(switch,neighbor[1])]
+                    lldp_pkt = self.build_lldp_packet(src_port_hw, switch, src_port_no)
+                    actions = [datapath.ofproto_parser.OFPActionOutput(src_port_no)]
+                    out = datapath.ofproto_parser.OFPPacketOut(
+                        datapath=datapath,
+                        buffer_id=datapath.ofproto.OFP_NO_BUFFER,
+                        in_port=datapath.ofproto.OFPP_CONTROLLER,
+                        actions=actions,
+                        data=lldp_pkt.data
+                    )
+                    datapath.send_msg(out)
+
+        self.counter+=1
+        if(self.counter != 5):
+            eventlet.spawn_after(1, self.calcualte_lldp)
+        else:self.running = False
     
     #Self Learning Switch
 
@@ -186,7 +218,7 @@ class SPR_Switch(RyuApp):
         self.sw_dpids.add(ev.switch.dp.id)
         self.dpids_datapath[ev.switch.dp.id] = ev.switch.dp
         self.adj[ev.switch.dp.id] = set()
-        self.send_echo_request(ev.switch.dp)
+        # self.send_echo_request(ev.switch.dp)
         self.change = True
 
     @set_ev_cls(event.EventSwitchLeave)
@@ -203,25 +235,28 @@ class SPR_Switch(RyuApp):
     def link_add(self,ev):
         self.adj[ev.link.src.dpid].add((ev.link.dst.dpid, ev.link.src.port_no, ev.link.dst.port_no))
         self.adj[ev.link.dst.dpid].add((ev.link.src.dpid, ev.link.dst.port_no, ev.link.src.port_no))
-        for i in range(10):
-            datapath, src_port_no = self.dpids_datapath[ev.link.src.dpid], ev.link.src.port_no
-            lldp_pkt = self.build_lldp_packet(ev.link.src, src_port_no)
-            actions = [datapath.ofproto_parser.OFPActionOutput(src_port_no)]
-            out = datapath.ofproto_parser.OFPPacketOut(
-                datapath=datapath,
-                buffer_id=datapath.ofproto.OFP_NO_BUFFER,
-                in_port=datapath.ofproto.OFPP_CONTROLLER,
-                actions=actions,
-                data=lldp_pkt.data
-            )
-            datapath.send_msg(out)
+        self.sw_port_hw_addr[(ev.link.src.dpid, ev.link.src.port_no)] = ev.link.src.hw_addr
+        self.sw_port_hw_addr[(ev.link.dst.dpid, ev.link.dst.port_no)] = ev.link.dst.hw_addr
         self.change = True
+        if(not self.running):
+            self.counter = 0
+            self.calcualte_lldp()
+
         
     @set_ev_cls(event.EventLinkDelete)
     def link_delete(self,ev):
         self.adj[ev.link.src.dpid].discard((ev.link.dst.dpid, ev.link.src.port_no, ev.link.dst.port_no))
         self.adj[ev.link.dst.dpid].discard((ev.link.src.dpid, ev.link.dst.port_no, ev.link.src.port_no))
+        if((ev.link.src.dpid, ev.link.src.port_no) in self.sw_port_hw_addr):
+            del self.sw_port_hw_addr[(ev.link.src.dpid, ev.link.src.port_no)]
+        if((ev.link.src.dpid, ev.link.src.port_no) in self.delay):
+            del self.delay[(ev.link.src.dpid, ev.link.src.port_no)]
+        if((ev.link.dst.dpid, ev.link.dst.port_no) in self.delay):
+            del self.delay[(ev.link.dst.dpid, ev.link.dst.port_no)]
+        if((ev.link.dst.dpid, ev.link.dst.port_no) in self.sw_port_hw_addr):
+            del self.sw_port_hw_addr[(ev.link.dst.dpid, ev.link.dst.port_no)]
         self.change = True
+        
     
     def handle_topo_change(self):
         self.logger.info("Topology changed")
@@ -231,28 +266,28 @@ class SPR_Switch(RyuApp):
         for switch in self.adj:
             adj[switch] = set()
             for link in self.adj[switch]:
-                delay = self.delay[(link[0],link[2])][0]/self.delay[(link[0],link[2])][1] if (link[0],link[2]) in self.delay else 100
-                delay -= self.controller_delay[switch][0]/self.controller_delay[switch][1] if switch in self.controller_delay else 0
-                delay -= self.controller_delay[link[0]][0]/self.controller_delay[link[0]][1] if link[0] in self.controller_delay else 0
+                delay = self.delay[(link[0],link[2])] if (link[0],link[2]) in self.delay else 100
+                delay -= self.controller_delay[switch] if switch in self.controller_delay else 0
+                delay -= self.controller_delay[link[0]] if link[0] in self.controller_delay else 0
                 adj[switch].add((link[0],link[1],link[2], delay))
         self.logger.info(adj)
         self.blocked_ports = dijstra_structure(self.sw_dpids, adj)
         self.logger.info(self.blocked_ports)
 
     # LLDP Packet Handlers
-    def build_lldp_packet(self, src, port_no):
+    def build_lldp_packet(self, src_port_hw, src_dpid, port_no):
         timestamp = str(time.time()).encode('utf-8')
         # Create Ethernet frame
         eth = ethernet.ethernet(
             dst=lldp.LLDP_MAC_NEAREST_BRIDGE,
-            src=src.hw_addr,  
+            src=src_port_hw,  
             ethertype=ethernet.ether.ETH_TYPE_LLDP  
         )
 
         # Create LLDP Chassis ID and Port ID
         chassis_id = lldp.ChassisID(
             subtype=lldp.ChassisID.SUB_LOCALLY_ASSIGNED,
-            chassis_id=str(src.dpid).encode('utf-8')  # Use the datapath ID as chassis ID
+            chassis_id=str(src_dpid).encode('utf-8')  # Use the datapath ID as chassis ID
         )
         port_id = lldp.PortID(
             subtype=lldp.PortID.SUB_PORT_COMPONENT,
@@ -282,10 +317,9 @@ class SPR_Switch(RyuApp):
                 tlv_value = float(tlv.tlv_info)
                 pair = (src_id,src_port)
                 if((src_id,src_port) not in self.delay):
-                    self.delay[(src_id,src_port)] = (time.time() - tlv_value, 1)
+                    self.delay[(src_id,src_port)] = time.time() - tlv_value
                 else:
-                    self.delay[pair] = (self.delay[pair][0] + (time.time() - tlv_value), self.delay[pair][1]+1)
-                if(self.delay[pair][1]%5==0):
+                    self.delay[pair] = 0.8*self.delay[pair] + 0.2*(time.time() - tlv_value)
                     self.change = True
     
     #echo handler
@@ -302,12 +336,10 @@ class SPR_Switch(RyuApp):
         datapath = ev.msg.datapath
         latency = (time.time() - float(ev.msg.data))/2
         dpid = datapath.id
-        # self.echo_latency[datapath.id] = latency
         if(dpid not in self.controller_delay):
-            self.controller_delay[dpid] = (latency, 1)
+            self.controller_delay[dpid] = latency
         else:
-            self.controller_delay[dpid] = (self.controller_delay[dpid][0] + latency, self.controller_delay[dpid][1]+1)
-        if(self.controller_delay[dpid][1]%5==0):
+            self.controller_delay[dpid] = 0.8*self.controller_delay[dpid] + 0.2*latency
             self.change = True
 
             
